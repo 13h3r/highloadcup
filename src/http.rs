@@ -1,7 +1,7 @@
 use std::sync::{RwLock, Arc};
 use std::ops::Deref;
 
-use futures::future::{self, Future};
+use futures::future::Future;
 use futures::stream::Stream;
 
 use hyper::server::Service;
@@ -21,14 +21,10 @@ where
     S: Stream<Item = I, Error = hyper::Error>,
     I: Deref<Target = [u8]>,
 {
-    stream.fold(Vec::with_capacity(512), |mut buffer,
-     chunk|
-     -> future::FutureResult<
-        Vec<u8>,
-        hyper::Error,
-    > {
+    type Buffer = Result<Vec<u8>, hyper::Error>;
+    stream.fold(Vec::with_capacity(512), |mut buffer, chunk| -> Buffer {
         buffer.extend_from_slice(&chunk);
-        future::ok(buffer)
+        Ok(buffer)
     })
 }
 
@@ -47,15 +43,16 @@ impl Service for TravelsServer {
         let api = self.api.clone();
         let http_response = read_body.map(move |body| {
             use request::Request;
-            let result = router::route(method, uri, &body).and_then(|request| match request {
-                Request::Get(request) => {
-                    let lock = api.read().expect("Unable to lock (read)");
-                    lock.do_get(request)
-                }
-                Request::Post(request) => {
-                    let mut lock = api.write().expect("Unable to lock (write)");
-                    lock.do_post(request)
-                }
+            let result = router::route(method, uri, &body)
+                .and_then(|request| match request {
+                    Request::Get(request) => {
+                        let lock = api.read().expect("Failed to lock (read)");
+                        lock.do_get(request)
+                    }
+                    Request::Post(request) => {
+                        let mut lock = api.write().expect("Failed to lock (write)");
+                        lock.do_post(request)
+                    }
             });
 
             match result {
@@ -63,7 +60,7 @@ impl Service for TravelsServer {
                     let headers = {
                         let mut headers = Headers::with_capacity(3);
                         headers.set(ContentLength(response.len() as u64));
-                        // use raw headers to avoid allocation
+                        // raw headers to avoid allocation
                         headers.set_raw("Content-Type", "application/json");
                         if is_post {
                             headers.set_raw("Connection", "close");
